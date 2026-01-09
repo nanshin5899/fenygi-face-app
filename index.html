@@ -3,26 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>簡易人臉打卡系統</title>
+    <title>簡易人臉打卡系統 v2.0</title>
     <style>
         body { font-family: sans-serif; text-align: center; margin: 0; background: #f0f0f0; }
-        #video-container { position: relative; margin: 20px auto; width: 320px; height: 240px; background: #000; }
+        #video-container { position: relative; margin: 20px auto; width: 320px; height: 240px; background: #000; border: 3px solid #333; }
         video { width: 100%; height: 100%; object-fit: cover; }
         canvas { position: absolute; top: 0; left: 0; }
-        .controls { margin: 20px; }
-        input { padding: 10px; border-radius: 5px; border: 1px solid #ccc; }
-        button { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        .controls { margin: 15px; padding: 10px; background: #ddd; border-radius: 8px; max-width: 340px; margin-left: auto; margin-right: auto; }
+        input { padding: 8px; border-radius: 5px; border: 1px solid #ccc; width: 60%; }
+        button { padding: 8px 15px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; color: white; font-weight: bold;}
+        .btn-reg { background: #007bff; }
+        .btn-csv { background: #28a745; }
+        .btn-clear { background: #dc3545; }
         button:disabled { background: #ccc; }
-        #status { margin-top: 10px; font-weight: bold; color: #333; }
-        #log { margin-top: 20px; text-align: left; padding: 10px; background: white; max-width: 300px; margin-left: auto; margin-right: auto; height: 150px; overflow-y: scroll; }
+        #status { margin-top: 10px; font-weight: bold; color: #333; min-height: 20px;}
+        #log { margin-top: 10px; text-align: left; padding: 10px; background: white; max-width: 300px; margin-left: auto; margin-right: auto; height: 150px; overflow-y: scroll; border: 1px solid #ccc;}
     </style>
     <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 </head>
 <body>
 
-    <h2>人臉辨識打卡測試</h2>
+    <h2>人臉打卡系統 (含儲存功能)</h2>
     
-    <div id="status">正在載入 AI 模型... (請稍候)</div>
+    <div id="status">正在載入 AI 模型...</div>
 
     <div id="video-container">
         <video id="video" autoplay muted playsinline></video>
@@ -30,10 +33,13 @@
 
     <div class="controls">
         <input type="text" id="nameInput" placeholder="輸入員工姓名">
-        <button id="registerBtn" onclick="registerFace()" disabled>註冊這張臉</button>
+        <button id="registerBtn" class="btn-reg" onclick="registerFace()" disabled>註冊這張臉</button>
+        <br><br>
+        <button class="btn-csv" onclick="downloadCSV()">📥 下載 Excel</button>
+        <button class="btn-clear" onclick="clearAllData()">🗑️ 清除資料</button>
     </div>
 
-    <h3>打卡紀錄：</h3>
+    <h3>今日打卡紀錄：</h3>
     <div id="log"></div>
 
     <script>
@@ -42,62 +48,105 @@
         const registerBtn = document.getElementById('registerBtn');
         const logDiv = document.getElementById('log');
         
-        let labeledDescriptors = []; // 存儲註冊的人臉數據
+        let labeledDescriptors = []; // 存儲人臉數據
         let faceMatcher; // 比對器
+        let checkInLogs = []; // 存儲打卡紀錄文字
 
-        // 1. 載入模型 (使用公開的 GitHub 資源，免下載)
+        // 1. 啟動流程：載入模型 -> 讀取舊資料 -> 開鏡頭
         Promise.all([
             faceapi.nets.tinyFaceDetector.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
             faceapi.nets.faceLandmark68Net.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
             faceapi.nets.faceRecognitionNet.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models')
-        ]).then(startVideo).catch(err => {
-            status.innerText = "模型載入失敗，請檢查網路";
+        ]).then(async () => {
+            await loadLocalData(); // 載入之前存的資料
+            startVideo();
+        }).catch(err => {
+            status.innerText = "模型載入失敗";
             console.error(err);
         });
 
         // 2. 啟動攝影機
         function startVideo() {
-            status.innerText = "正在啟動攝影機...";
             navigator.mediaDevices.getUserMedia({ video: {} })
                 .then(stream => {
                     video.srcObject = stream;
-                    status.innerText = "系統就緒！請輸入姓名並註冊";
+                    status.innerText = "系統就緒！";
                     registerBtn.disabled = false;
-                    startRecognition(); // 開始偵測迴圈
+                    startRecognition(); 
                 })
                 .catch(err => {
-                    status.innerText = "無法開啟攝影機 (請確認 HTTPS 或權限)";
-                    console.error(err);
+                    status.innerText = "無法開啟攝影機 (請確認 HTTPS)";
                 });
         }
 
-        // 3. 註冊人臉功能
-        async function registerFace() {
-            const name = document.getElementById('nameInput').value;
-            if (!name) { alert("請先輸入姓名！"); return; }
+        // 3. 讀取 LocalStorage 資料 (防手滑功能)
+        async function loadLocalData() {
+            const localFaces = localStorage.getItem('myFaceData');
+            const localLogs = localStorage.getItem('myFaceLogs');
 
-            status.innerText = "正在註冊...";
-            
-            // 偵測目前畫面中的單一人臉
-            const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
+            // 恢復打卡紀錄
+            if (localLogs) {
+                checkInLogs = JSON.parse(localLogs);
+                checkInLogs.forEach(logText => {
+                    const div = document.createElement('div');
+                    div.innerText = logText;
+                    logDiv.prepend(div);
+                });
+            }
 
-            if (detection) {
-                // 將特徵數據存入陣列
-                labeledDescriptors.push(new faceapi.LabeledFaceDescriptors(name, [detection.descriptor]));
-                
-                // 更新比對器
-                faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.6);
-                
-                status.innerText = `成功註冊：${name}`;
-                alert(`已記住 ${name} 的臉！`);
-                document.getElementById('nameInput').value = '';
-            } else {
-                alert("沒抓到臉，請正對鏡頭再試一次");
-                status.innerText = "註冊失敗";
+            // 恢復人臉數據 (比較複雜，因為要轉回 Float32Array)
+            if (localFaces) {
+                const parsed = JSON.parse(localFaces);
+                labeledDescriptors = parsed.map(d => {
+                    // 將一般陣列轉回 Float32Array
+                    const descriptors = d.descriptors.map(arr => new Float32Array(arr));
+                    return new faceapi.LabeledFaceDescriptors(d.label, descriptors);
+                });
+
+                if (labeledDescriptors.length > 0) {
+                    faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.6);
+                    status.innerText = `已載入 ${labeledDescriptors.length} 位員工資料`;
+                }
             }
         }
 
-        // 4. 即時辨識迴圈
+        // 4. 儲存資料到 LocalStorage
+        function saveToLocal() {
+            // 儲存人臉 (將 Float32Array 轉為一般陣列才能存 JSON)
+            const serializableFaces = labeledDescriptors.map(ld => ({
+                label: ld.label,
+                descriptors: ld.descriptors.map(d => Array.from(d))
+            }));
+            localStorage.setItem('myFaceData', JSON.stringify(serializableFaces));
+            localStorage.setItem('myFaceLogs', JSON.stringify(checkInLogs));
+        }
+
+        // 5. 註冊人臉
+        async function registerFace() {
+            const name = document.getElementById('nameInput').value;
+            if (!name) { alert("請輸入姓名！"); return; }
+
+            status.innerText = "正在掃描特徵...";
+            const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
+
+            if (detection) {
+                labeledDescriptors.push(new faceapi.LabeledFaceDescriptors(name, [detection.descriptor]));
+                faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.6);
+                
+                status.innerText = `註冊成功：${name}`;
+                alert(`已記住 ${name}`);
+                document.getElementById('nameInput').value = '';
+                
+                saveToLocal(); // 立即儲存
+            } else {
+                alert("沒抓到臉，請對準鏡頭");
+            }
+        }
+
+        // 6. 辨識與打卡邏輯
+        let lastLogTime = 0;
+        let lastLogName = "";
+
         async function startRecognition() {
             const canvas = faceapi.createCanvasFromMedia(video);
             document.getElementById('video-container').append(canvas);
@@ -105,17 +154,12 @@
             faceapi.matchDimensions(canvas, displaySize);
 
             setInterval(async () => {
-                // 如果還沒註冊任何人，就不辨識
                 if (!faceMatcher) return;
 
-                // 偵測畫面中所有的人臉
                 const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptors();
                 const resizedDetections = faceapi.resizeResults(detections, displaySize);
-
-                // 清除舊的繪圖
                 canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
 
-                // 比對每一張臉
                 const results = resizedDetections.map(d => faceMatcher.findBestMatch(d.descriptor));
 
                 results.forEach((result, i) => {
@@ -123,30 +167,67 @@
                     const drawBox = new faceapi.draw.DrawBox(box, { label: result.toString() });
                     drawBox.draw(canvas);
 
-                    // 如果辨識出已知的人 (不是 unknown)，就記錄
                     if (result.label !== 'unknown') {
-                        addLog(result.label);
+                        recordCheckIn(result.label);
                     }
                 });
-            }, 500); // 每 0.5 秒偵測一次
+            }, 500);
         }
 
-        // 簡單的防止重複打卡機制 (5秒內不重複記)
-        let lastLogTime = 0;
-        let lastLogName = "";
-
-        function addLog(name) {
+        function recordCheckIn(name) {
             const now = new Date();
-            if (name === lastLogName && (now - lastLogTime) < 5000) return; // 5秒內同一個人不重複顯示
+            // 10秒內不重複打卡
+            if (name === lastLogName && (now - lastLogTime) < 10000) return;
 
             lastLogTime = now;
             lastLogName = name;
             
-            const timeString = now.toLocaleTimeString();
-            const logEntry = document.createElement('div');
-            logEntry.innerText = `[${timeString}] ${name} 已通過`;
-            logDiv.prepend(logEntry); // 最新紀錄在最上面
+            const timeString = now.toLocaleString();
+            const logText = `[${timeString}] ${name}`;
+            
+            // 更新畫面
+            const div = document.createElement('div');
+            div.innerText = logText;
+            logDiv.prepend(div);
             status.innerText = `歡迎！ ${name}`;
+
+            // 儲存紀錄
+            checkInLogs.push(logText);
+            saveToLocal();
+        }
+
+        // 7. 匯出 CSV (Excel)
+        function downloadCSV() {
+            if (checkInLogs.length === 0) {
+                alert("目前沒有任何打卡紀錄！");
+                return;
+            }
+            
+            // 加入 BOM (\uFEFF) 讓 Excel 能正確顯示中文
+            let csvContent = "\uFEFF時間,姓名\n"; 
+            
+            checkInLogs.forEach(log => {
+                // 將 "[2023/1/1 上午10:00] 王小明" 格式簡單拆解
+                // 這裡簡單把原始文字填入，若需精確分欄可再調整
+                csvContent += log.replace('] ', '],') + "\n";
+            });
+
+            const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", "打卡紀錄.csv");
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        // 8. 清除所有資料
+        function clearAllData() {
+            if(confirm("確定要刪除所有註冊的臉和紀錄嗎？無法復原喔！")) {
+                localStorage.clear();
+                location.reload(); // 重新整理網頁
+            }
         }
     </script>
 </body>
