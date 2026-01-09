@@ -3,25 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>人臉打卡 V3.0 (直式專用)</title>
+    <title>人臉打卡 V4.0 (高精度版)</title>
     <style>
         body { font-family: sans-serif; text-align: center; margin: 0; background: #f0f0f0; }
         
-        /* 修改處：將容器改為直式比例，並設定最大寬度 */
         #video-container { 
             position: relative; 
             margin: 20px auto; 
-            width: 300px; /* 直式寬度 */
-            height: 400px; /* 直式高度 */
+            width: 300px; 
+            height: 400px; 
             background: #000; 
             border: 3px solid #333; 
             border-radius: 10px;
-            overflow: hidden; /* 防止溢出 */
+            overflow: hidden; 
         }
         
-        /* 讓影片填滿容器 */
         video { width: 100%; height: 100%; object-fit: cover; }
-        
         canvas { position: absolute; top: 0; left: 0; }
         .controls { margin: 15px; padding: 10px; background: #ddd; border-radius: 8px; max-width: 340px; margin-left: auto; margin-right: auto; }
         input { padding: 8px; border-radius: 5px; border: 1px solid #ccc; width: 60%; }
@@ -37,9 +34,10 @@
 </head>
 <body>
 
-    <h2>人臉打卡系統 (直式版)</h2>
+    <h2>人臉打卡系統 (高精度版)</h2>
+    <p style="font-size:12px; color:red;">*此版本使用高精度模型，載入會稍慢</p>
     
-    <div id="status">正在載入 AI 模型...</div>
+    <div id="status">正在載入大型 AI 模型... (請耐心等待)</div>
 
     <div id="video-container">
         <video id="video" autoplay muted playsinline></video>
@@ -66,8 +64,9 @@
         let faceMatcher; 
         let checkInLogs = []; 
 
+        // 修改 1: 改為載入 SSD MobileNet V1 (重型模型)
         Promise.all([
-            faceapi.nets.tinyFaceDetector.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
+            faceapi.nets.ssdMobilenetv1.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'), // 偵測器換了
             faceapi.nets.faceLandmark68Net.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
             faceapi.nets.faceRecognitionNet.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models')
         ]).then(async () => {
@@ -79,7 +78,6 @@
         });
 
         function startVideo() {
-            // 修改處：要求瀏覽器盡量給直式畫面 (ideal: { width: 480, height: 640 })
             navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 480 }, height: { ideal: 640 } } })
                 .then(stream => {
                     video.srcObject = stream;
@@ -98,7 +96,6 @@
                 });
         }
 
-        // 修改處：監聽影片播放事件，確保尺寸正確後才開始辨識
         video.addEventListener('play', () => {
             startRecognition();
         });
@@ -124,7 +121,7 @@
                 });
 
                 if (labeledDescriptors.length > 0) {
-                    faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.6);
+                    faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.5); // 稍微放寬一點標準 0.6 -> 0.5
                 }
             }
         }
@@ -142,13 +139,15 @@
             const name = document.getElementById('nameInput').value;
             if (!name) { alert("請輸入姓名！"); return; }
 
-            status.innerText = "正在掃描特徵...";
-            // 使用 TinyFaceDetectorOptions 
-            const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
+            status.innerText = "正在精細掃描...";
+            
+            // 修改 2: 註冊時使用 SsdMobilenetv1Options
+            // minConfidence: 0.5 代表只要有 50% 把握是臉就抓出來
+            const detection = await faceapi.detectSingleFace(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })).withFaceLandmarks().withFaceDescriptor();
 
             if (detection) {
                 labeledDescriptors.push(new faceapi.LabeledFaceDescriptors(name, [detection.descriptor]));
-                faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.6);
+                faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.5);
                 
                 status.innerText = `註冊成功：${name} (目前共 ${labeledDescriptors.length} 人)`;
                 alert(`已記住 ${name}`);
@@ -156,7 +155,7 @@
                 
                 saveToLocal(); 
             } else {
-                alert("沒抓到臉！請確認：\n1.臉部光線充足\n2.不要離太遠\n3.臉在畫面正中間");
+                alert("沒抓到臉！若戴口罩請再試一次，或暫時脫下口罩註冊。");
                 status.innerText = "註冊失敗，請重試";
             }
         }
@@ -168,17 +167,16 @@
             const canvas = faceapi.createCanvasFromMedia(video);
             document.getElementById('video-container').append(canvas);
             
-            // 修改處：動態抓取影片實際播放尺寸，解決變形問題
             const displaySize = { width: video.offsetWidth, height: video.offsetHeight };
             faceapi.matchDimensions(canvas, displaySize);
 
             setInterval(async () => {
                 if (!faceMatcher) return;
 
-                const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptors();
+                // 修改 3: 辨識時也使用 SsdMobilenetv1Options
+                const detections = await faceapi.detectAllFaces(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })).withFaceLandmarks().withFaceDescriptors();
                 const resizedDetections = faceapi.resizeResults(detections, displaySize);
                 
-                // 確保 canvas 尺寸跟影片一樣，不然框會飄移
                 canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
 
                 const results = resizedDetections.map(d => faceMatcher.findBestMatch(d.descriptor));
