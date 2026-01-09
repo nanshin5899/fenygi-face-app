@@ -3,11 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>人臉打卡系統 v2.1</title>
+    <title>人臉打卡 V3.0 (直式專用)</title>
     <style>
         body { font-family: sans-serif; text-align: center; margin: 0; background: #f0f0f0; }
-        #video-container { position: relative; margin: 20px auto; width: 320px; height: 240px; background: #000; border: 3px solid #333; }
+        
+        /* 修改處：將容器改為直式比例，並設定最大寬度 */
+        #video-container { 
+            position: relative; 
+            margin: 20px auto; 
+            width: 300px; /* 直式寬度 */
+            height: 400px; /* 直式高度 */
+            background: #000; 
+            border: 3px solid #333; 
+            border-radius: 10px;
+            overflow: hidden; /* 防止溢出 */
+        }
+        
+        /* 讓影片填滿容器 */
         video { width: 100%; height: 100%; object-fit: cover; }
+        
         canvas { position: absolute; top: 0; left: 0; }
         .controls { margin: 15px; padding: 10px; background: #ddd; border-radius: 8px; max-width: 340px; margin-left: auto; margin-right: auto; }
         input { padding: 8px; border-radius: 5px; border: 1px solid #ccc; width: 60%; }
@@ -23,7 +37,7 @@
 </head>
 <body>
 
-    <h2>人臉打卡系統 (含儲存功能)</h2>
+    <h2>人臉打卡系統 (直式版)</h2>
     
     <div id="status">正在載入 AI 模型...</div>
 
@@ -52,7 +66,6 @@
         let faceMatcher; 
         let checkInLogs = []; 
 
-        // 1. 啟動流程
         Promise.all([
             faceapi.nets.tinyFaceDetector.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
             faceapi.nets.faceLandmark68Net.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
@@ -65,13 +78,12 @@
             console.error(err);
         });
 
-        // 2. 啟動攝影機 (修正顯示文字的部分)
         function startVideo() {
-            navigator.mediaDevices.getUserMedia({ video: {} })
+            // 修改處：要求瀏覽器盡量給直式畫面 (ideal: { width: 480, height: 640 })
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 480 }, height: { ideal: 640 } } })
                 .then(stream => {
                     video.srcObject = stream;
                     
-                    // 這裡做了修改：判斷是否有人數，顯示對應文字
                     const count = labeledDescriptors.length;
                     if (count > 0) {
                         status.innerText = `系統就緒！(已載入 ${count} 位員工資料)`;
@@ -80,14 +92,17 @@
                     }
 
                     registerBtn.disabled = false;
-                    startRecognition(); 
                 })
                 .catch(err => {
                     status.innerText = "無法開啟攝影機 (請確認 HTTPS)";
                 });
         }
 
-        // 3. 讀取 LocalStorage
+        // 修改處：監聽影片播放事件，確保尺寸正確後才開始辨識
+        video.addEventListener('play', () => {
+            startRecognition();
+        });
+
         async function loadLocalData() {
             const localFaces = localStorage.getItem('myFaceData');
             const localLogs = localStorage.getItem('myFaceLogs');
@@ -114,7 +129,6 @@
             }
         }
 
-        // 4. 儲存資料
         function saveToLocal() {
             const serializableFaces = labeledDescriptors.map(ld => ({
                 label: ld.label,
@@ -124,38 +138,38 @@
             localStorage.setItem('myFaceLogs', JSON.stringify(checkInLogs));
         }
 
-        // 5. 註冊人臉
         async function registerFace() {
             const name = document.getElementById('nameInput').value;
             if (!name) { alert("請輸入姓名！"); return; }
 
             status.innerText = "正在掃描特徵...";
+            // 使用 TinyFaceDetectorOptions 
             const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
 
             if (detection) {
                 labeledDescriptors.push(new faceapi.LabeledFaceDescriptors(name, [detection.descriptor]));
                 faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.6);
                 
-                // 註冊成功後，更新狀態文字
                 status.innerText = `註冊成功：${name} (目前共 ${labeledDescriptors.length} 人)`;
                 alert(`已記住 ${name}`);
                 document.getElementById('nameInput').value = '';
                 
                 saveToLocal(); 
             } else {
-                alert("沒抓到臉，請對準鏡頭");
+                alert("沒抓到臉！請確認：\n1.臉部光線充足\n2.不要離太遠\n3.臉在畫面正中間");
                 status.innerText = "註冊失敗，請重試";
             }
         }
 
-        // 6. 辨識與打卡
         let lastLogTime = 0;
         let lastLogName = "";
 
         async function startRecognition() {
             const canvas = faceapi.createCanvasFromMedia(video);
             document.getElementById('video-container').append(canvas);
-            const displaySize = { width: video.width || 320, height: video.height || 240 };
+            
+            // 修改處：動態抓取影片實際播放尺寸，解決變形問題
+            const displaySize = { width: video.offsetWidth, height: video.offsetHeight };
             faceapi.matchDimensions(canvas, displaySize);
 
             setInterval(async () => {
@@ -163,6 +177,8 @@
 
                 const detections = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptors();
                 const resizedDetections = faceapi.resizeResults(detections, displaySize);
+                
+                // 確保 canvas 尺寸跟影片一樣，不然框會飄移
                 canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
 
                 const results = resizedDetections.map(d => faceMatcher.findBestMatch(d.descriptor));
@@ -193,14 +209,12 @@
             div.innerText = logText;
             logDiv.prepend(div);
             
-            // 這裡也修正：辨識成功後，保持顯示目前人數狀態
             status.innerText = `歡迎！ ${name} (已記錄)`;
 
             checkInLogs.push(logText);
             saveToLocal();
         }
 
-        // 7. 匯出 CSV
         function downloadCSV() {
             if (checkInLogs.length === 0) {
                 alert("目前沒有任何打卡紀錄！");
