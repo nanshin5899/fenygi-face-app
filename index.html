@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>人臉打卡 V4.0 (高精度版)</title>
+    <title>人臉打卡 V4.1 (口罩最佳化版)</title>
     <style>
         body { font-family: sans-serif; text-align: center; margin: 0; background: #f0f0f0; }
         
@@ -34,8 +34,8 @@
 </head>
 <body>
 
-    <h2>人臉打卡系統 (高精度版)</h2>
-    <p style="font-size:12px; color:red;">*此版本使用高精度模型，載入會稍慢</p>
+    <h2>人臉打卡系統 (口罩優化版)</h2>
+    <p style="font-size:12px; color:red;">*判定標準已放寬至 0.6</p>
     
     <div id="status">正在載入大型 AI 模型... (請耐心等待)</div>
 
@@ -64,9 +64,11 @@
         let faceMatcher; 
         let checkInLogs = []; 
 
-        // 修改 1: 改為載入 SSD MobileNet V1 (重型模型)
+        // 設定及格分數：0.6 (數字越小越像，口罩通常在 0.55 左右)
+        const THRESHOLD = 0.6;
+
         Promise.all([
-            faceapi.nets.ssdMobilenetv1.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'), // 偵測器換了
+            faceapi.nets.ssdMobilenetv1.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
             faceapi.nets.faceLandmark68Net.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models'),
             faceapi.nets.faceRecognitionNet.loadFromUri('https://justadudewhohacks.github.io/face-api.js/models')
         ]).then(async () => {
@@ -121,7 +123,8 @@
                 });
 
                 if (labeledDescriptors.length > 0) {
-                    faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.5); // 稍微放寬一點標準 0.6 -> 0.5
+                    // 修改處：載入時使用新的標準 0.6
+                    faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, THRESHOLD);
                 }
             }
         }
@@ -141,13 +144,14 @@
 
             status.innerText = "正在精細掃描...";
             
-            // 修改 2: 註冊時使用 SsdMobilenetv1Options
-            // minConfidence: 0.5 代表只要有 50% 把握是臉就抓出來
+            // 降低偵測門檻到 0.5，讓戴口罩的臉容易被「抓」到
             const detection = await faceapi.detectSingleFace(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })).withFaceLandmarks().withFaceDescriptor();
 
             if (detection) {
                 labeledDescriptors.push(new faceapi.LabeledFaceDescriptors(name, [detection.descriptor]));
-                faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.5);
+                
+                // 修改處：註冊時更新比對器標準為 0.6
+                faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, THRESHOLD);
                 
                 status.innerText = `註冊成功：${name} (目前共 ${labeledDescriptors.length} 人)`;
                 alert(`已記住 ${name}`);
@@ -155,7 +159,7 @@
                 
                 saveToLocal(); 
             } else {
-                alert("沒抓到臉！若戴口罩請再試一次，或暫時脫下口罩註冊。");
+                alert("沒抓到臉！若戴口罩請再試一次");
                 status.innerText = "註冊失敗，請重試";
             }
         }
@@ -173,7 +177,6 @@
             setInterval(async () => {
                 if (!faceMatcher) return;
 
-                // 修改 3: 辨識時也使用 SsdMobilenetv1Options
                 const detections = await faceapi.detectAllFaces(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })).withFaceLandmarks().withFaceDescriptors();
                 const resizedDetections = faceapi.resizeResults(detections, displaySize);
                 
@@ -183,7 +186,9 @@
 
                 results.forEach((result, i) => {
                     const box = resizedDetections[i].detection.box;
-                    const drawBox = new faceapi.draw.DrawBox(box, { label: result.toString() });
+                    // 這裡把分數顯示出來，方便您觀察
+                    const label = result.toString(); 
+                    const drawBox = new faceapi.draw.DrawBox(box, { label: label });
                     drawBox.draw(canvas);
 
                     if (result.label !== 'unknown') {
