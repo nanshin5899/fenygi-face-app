@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>人臉打卡 V4.1 (口罩最佳化版)</title>
+    <title>人臉打卡 V4.2 (紀錄管理版)</title>
     <style>
         body { font-family: sans-serif; text-align: center; margin: 0; background: #f0f0f0; }
         
@@ -23,9 +23,13 @@
         .controls { margin: 15px; padding: 10px; background: #ddd; border-radius: 8px; max-width: 340px; margin-left: auto; margin-right: auto; }
         input { padding: 8px; border-radius: 5px; border: 1px solid #ccc; width: 60%; }
         button { padding: 8px 15px; margin: 5px; border: none; border-radius: 5px; cursor: pointer; color: white; font-weight: bold;}
-        .btn-reg { background: #007bff; }
-        .btn-csv { background: #28a745; }
-        .btn-clear { background: #dc3545; }
+        
+        /* 按鈕顏色設定 */
+        .btn-reg { background: #007bff; } /* 藍色: 註冊 */
+        .btn-csv { background: #28a745; } /* 綠色: 下載 */
+        .btn-log-clear { background: #ffc107; color: #333; } /* 黃色: 清紀錄 */
+        .btn-reset { background: #dc3545; font-size: 12px; padding: 5px 10px; } /* 紅色: 重置 */
+        
         button:disabled { background: #ccc; }
         #status { margin-top: 10px; font-weight: bold; color: #333; min-height: 20px;}
         #log { margin-top: 10px; text-align: left; padding: 10px; background: white; max-width: 300px; margin-left: auto; margin-right: auto; height: 150px; overflow-y: scroll; border: 1px solid #ccc;}
@@ -34,8 +38,8 @@
 </head>
 <body>
 
-    <h2>人臉打卡系統 (口罩優化版)</h2>
-    <p style="font-size:12px; color:red;">*判定標準已放寬至 0.6</p>
+    <h2>人臉打卡系統 (紀錄管理版)</h2>
+    <p style="font-size:12px; color:red;">*判定標準 0.6 (支援口罩)</p>
     
     <div id="status">正在載入大型 AI 模型... (請耐心等待)</div>
 
@@ -48,7 +52,11 @@
         <button id="registerBtn" class="btn-reg" onclick="registerFace()" disabled>註冊這張臉</button>
         <br><br>
         <button class="btn-csv" onclick="downloadCSV()">📥 下載 Excel</button>
-        <button class="btn-clear" onclick="clearAllData()">🗑️ 清除資料</button>
+        <button class="btn-log-clear" onclick="clearLogsOnly()">🧹 清除紀錄</button>
+        <br>
+        <div style="margin-top: 10px;">
+            <button class="btn-reset" onclick="fullReset()">⚠️ 重置系統 (刪除人臉)</button>
+        </div>
     </div>
 
     <h3>今日打卡紀錄：</h3>
@@ -64,7 +72,6 @@
         let faceMatcher; 
         let checkInLogs = []; 
 
-        // 設定及格分數：0.6 (數字越小越像，口罩通常在 0.55 左右)
         const THRESHOLD = 0.6;
 
         Promise.all([
@@ -123,7 +130,6 @@
                 });
 
                 if (labeledDescriptors.length > 0) {
-                    // 修改處：載入時使用新的標準 0.6
                     faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, THRESHOLD);
                 }
             }
@@ -144,13 +150,11 @@
 
             status.innerText = "正在精細掃描...";
             
-            // 降低偵測門檻到 0.5，讓戴口罩的臉容易被「抓」到
             const detection = await faceapi.detectSingleFace(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })).withFaceLandmarks().withFaceDescriptor();
 
             if (detection) {
                 labeledDescriptors.push(new faceapi.LabeledFaceDescriptors(name, [detection.descriptor]));
                 
-                // 修改處：註冊時更新比對器標準為 0.6
                 faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, THRESHOLD);
                 
                 status.innerText = `註冊成功：${name} (目前共 ${labeledDescriptors.length} 人)`;
@@ -186,7 +190,6 @@
 
                 results.forEach((result, i) => {
                     const box = resizedDetections[i].detection.box;
-                    // 這裡把分數顯示出來，方便您觀察
                     const label = result.toString(); 
                     const drawBox = new faceapi.draw.DrawBox(box, { label: label });
                     drawBox.draw(canvas);
@@ -238,8 +241,19 @@
             document.body.removeChild(link);
         }
 
-        function clearAllData() {
-            if(confirm("確定要刪除所有註冊的臉和紀錄嗎？無法復原喔！")) {
+        // 修改處：新增「只清除紀錄」功能
+        function clearLogsOnly() {
+            if(confirm("確定要清空今天的列表嗎？(員工臉部資料會保留)")) {
+                checkInLogs = []; // 清空陣列
+                localStorage.setItem('myFaceLogs', JSON.stringify(checkInLogs)); // 更新資料庫
+                logDiv.innerHTML = ''; // 清空畫面
+                status.innerText = "打卡紀錄已清除";
+            }
+        }
+
+        // 修改處：原有的清除功能改名為「重置系統」
+        function fullReset() {
+            if(confirm("⚠️ 嚴重警告：這會刪除「所有」員工的人臉資料！\n\n確定要重頭開始嗎？")) {
                 localStorage.clear();
                 location.reload(); 
             }
